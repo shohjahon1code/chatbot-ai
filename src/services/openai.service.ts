@@ -2,28 +2,22 @@ import OpenAI from "openai";
 import { config } from "../config";
 import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import axios from "axios";
+import { SYSTEM_PROMPT } from "../constants";
+import { ChatMessage } from "../interfaces";
 
 const openai = new OpenAI({
   apiKey: config.OPENAI_API_KEY,
 });
 
-const SYSTEM_PROMPT = `You are an experienced antique dealer with deep knowledge of various antiques, their history, and market values. 
-You help customers learn about antiques, negotiate prices, and make informed purchasing decisions.
-Always maintain a professional yet friendly tone. If a customer uploads an image, analyze it and provide relevant information about the antique.
-When negotiating prices:
-- Start with a reasonable market price
-- Be willing to negotiate within a 10-20% range
-- Consider the item's condition, rarity, and historical significance
-- Explain your pricing rationale`;
-
-export interface ChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string | any[];
-}
-
 export class OpenAIService {
   private static instance: OpenAIService;
   private context: ChatMessage[] = [{ role: "system", content: SYSTEM_PROMPT }];
+  private marketPrices: Record<string, number> = {
+    "antique vase": 300,
+    "old clock": 450,
+    "vintage painting": 700,
+    "rare coin": 200,
+  };
 
   private constructor() {}
 
@@ -36,9 +30,7 @@ export class OpenAIService {
 
   private async getBase64FromUrl(url: string): Promise<string> {
     try {
-      const response = await axios.get(url, {
-        responseType: "arraybuffer",
-      });
+      const response = await axios.get(url, { responseType: "arraybuffer" });
       const contentType = response.headers["content-type"];
       const base64 = Buffer.from(response.data, "binary").toString("base64");
       return `data:${contentType};base64,${base64}`;
@@ -47,8 +39,30 @@ export class OpenAIService {
     }
   }
 
+  private determinePrice(item: string, userOffer: number): number {
+    const basePrice = this.marketPrices[item.toLowerCase()] || 500;
+    const minAcceptablePrice = basePrice * 0.8;
+
+    if (userOffer >= minAcceptablePrice && userOffer <= basePrice) {
+      return userOffer;
+    } else if (userOffer < minAcceptablePrice) {
+      return minAcceptablePrice;
+    }
+    return basePrice;
+  }
+
   async chat(message: string): Promise<string> {
     this.context.push({ role: "user", content: message });
+
+    let negotiationMessage = "";
+    const priceMatch = message.match(/\$(\d+)/);
+    if (priceMatch) {
+      const userOffer = parseInt(priceMatch[1], 10);
+      const bestPrice = this.determinePrice("antique item", userOffer);
+
+      negotiationMessage = `The user offered $${userOffer}. Counter with a price around $${bestPrice}, and justify the price based on rarity and condition.`;
+      this.context.push({ role: "system", content: negotiationMessage });
+    }
 
     try {
       const response = await openai.chat.completions.create({
@@ -75,24 +89,16 @@ export class OpenAIService {
 
   async analyzeImage(imageUrl: string): Promise<string> {
     try {
-      console.log("Starting image analysis for URL:", imageUrl);
-
       const base64Image = await this.getBase64FromUrl(imageUrl);
 
       const messages: ChatCompletionMessageParam[] = [
         {
           role: "user",
           content: [
-            {
-              type: "text",
-              text: "Please analyze this antique item in detail. Describe its style, estimated age, origin, potential value, and any notable features or characteristics.",
-            },
+            { type: "text", text: SYSTEM_PROMPT },
             {
               type: "image_url",
-              image_url: {
-                url: base64Image,
-                detail: "high",
-              },
+              image_url: { url: base64Image, detail: "high" },
             },
           ],
         } as ChatCompletionMessageParam,

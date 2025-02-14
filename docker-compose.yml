@@ -1,0 +1,13 @@
+version: "3.7"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: ./dockerfile
+    restart: always
+    ports:
+      - "3110:3110"
+    env_file: .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
